@@ -10,7 +10,8 @@ socketfile="/tmp/picopy.sock"
 
 function dcho()
 {
-[[ "${DEBUG:-0}" == "1" ]] && echo "$@" >> "${logfile}"
+[[ "${DEBUG:-0}" -ge 1 ]] && echo "$@" >> "${logfile}"
+[[ "${DEBUG:-0}" -ge 2 ]] && echo "$@" >&2
 }
 
 #***************************************************************************************************
@@ -447,7 +448,7 @@ if [[ "$1" == "listen" ]]; then
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
 
-	echo "enter loop"
+	dcho "enter loop"
 	while read -rs -u 3 -a values; do
 		dcho "${values[@]}"
 
@@ -460,7 +461,6 @@ if [[ "$1" == "listen" ]]; then
 				"$0" child "${action}" "${serial}" &
 				children["${serial}"]="$!"
 				dcho "Spawning child for ${action} ${serial}: ${children[$serial]}..."
-				echo "Spawning child for ${action} ${serial}: ${children[$serial]}..."
 			fi
 		fi
 
