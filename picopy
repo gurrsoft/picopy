@@ -1,0 +1,439 @@
+#!/usr/bin/env bash
+
+me="piCOpy"
+version="0.1"
+configfile="${HOME}/.config/picopy.cfg"
+logfile="${HOME}/picopy.log"
+socketfile="/tmp/picopy.sock"
+
+#***************************************************************************************************
+
+function dcho()
+{
+[[ "${DEBUG:-0}" == "1" ]] && echo "$@" >> "${logfile}"
+}
+
+#***************************************************************************************************
+
+# shellcheck disable=SC2317
+function child_cleanup()
+{
+dcho "Child cleanup called..."
+
+trap - EXIT INT TERM
+
+if [[ "${yad_pid}" != "" ]]; then
+	kill "${yad_pid}" 2>/dev/null
+fi
+
+if [[ -e "${socketfile}" ]]; then
+	echo "done ${serial}" > "${socketfile}"
+fi
+}
+
+#***************************************************************************************************
+# first argument results variable name
+# all other arguments passed to yad
+# output limited to coproc buffer size!
+
+yad_run()
+{
+# use name reference here; _result will be bound to the variable whos name is in $1
+local -n _result=$1
+local ret line
+
+shift
+
+coproc YAD_PROCESS {
+	exec yad "$@"
+}
+yad_pid=$YAD_PROCESS_PID
+
+_result=""
+while IFS= read -r line || [[ -n "${line}" ]]; do
+	_result+="${line}"$'\n'
+done <&"${YAD_PROCESS[0]}"
+
+wait "$yad_pid" 2>/dev/null
+ret=$?
+
+yad_pid=""
+
+return "$ret"
+}
+
+#***************************************************************************************************
+#***************************************************************************************************
+
+# shellcheck disable=SC2317
+function cleanup()
+{
+trap - EXIT INT TERM
+
+# We can't remove the fifo as it's now owned by root; we close the fifo instead
+exec 3>&-
+#if [[ -e "${socketfile}" ]]; then
+#	rm -f "${socketfile}"
+#fi
+
+# We first remove the socket file as we don't care about any child feedback/return, then kill the child processes...
+for serial in "${!children[@]}"; do
+	kill "${children[$serial]}" 2>/dev/null
+done
+}
+
+#***************************************************************************************************
+
+function firmware_select_menu()
+{
+local firmware_file firmware_list
+
+firmware_list=()
+firmware_list=( "FALSE" "a" "TRUE" "b" "FALSE" "c" )
+
+yad_run firmware_file --title="${me} ${version} - Select firmware to upload!" --width=800 --height=400 --center --grid-lines=vert --on-top --selectable-labels --list --buttons-layout=center --button="Upload selected":0 --button="Browse":200 --button=Cancel:1 --column "Selection" --column "Firmware path" "${firmware_list[@]}"
+ret=$?
+#prefix="$(echo "${selection}" | cut -d'|' -f3)"
+
+# User selected browse
+if [[ "$ret" == "200" ]]; then
+	yad_run firmware_file --title="${me} ${version} - Select firmware to upload!" --width=1000 --height=760 --center --on-top --file --file-filter='UF2 firmware image | *.uf2' --file-filter='All files | *' --filename="${HOME}"
+	echo $?
+fi
+
+if [[ "$ret" == "0" || "$ret" == "200" ]]; then
+	echo "User selected prefix: ${firmware_file}"
+else
+	echo "User hit Cancel or ESC, no prefix was selected"
+fi
+}
+
+#***************************************************************************************************
+
+# load_section FILE SECTION ARRAY_NAME APPEND(=false; 0/1)
+#
+# Loads the lines belonging to SECTION into the named Bash array.
+# Returns:
+#   0 - section found
+#   1 - section not found
+#   2 - invalid arguments
+#
+function load_section()
+{
+local file=$1
+local section=$2
+local array_name=$3
+local current_section line found
+
+[[ $# -eq 3 ]] || return 2
+[[ -f "$file" ]] || return 1
+
+local -n result="$array_name"
+[[ "${4:-0}" == "0" ]] && result=()
+
+current_section=""
+found=0
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+	# Section header
+	if [[ $line =~ ^\[([^\]]+)\]$ ]]; then
+		current_section=${BASH_REMATCH[1]}
+
+		if [[ $found -eq 1 ]]; then
+			# A new section also terminates the previous one.
+			break
+		fi
+
+		[[ $current_section == "$section" ]] && found=1
+		continue
+	fi
+
+	# Empty line terminates a section.
+	if [[ -z "$line" ]]; then
+		if [[ $found -eq 1 ]]; then
+			break
+		fi
+		current_section=""
+		continue
+	fi
+
+	# Collect lines belonging to the requested section.
+	if [[ $found -eq 1 ]]; then
+		result+=("$line")
+	fi
+done < "$file"
+
+(( found ))
+}
+
+#***************************************************************************************************
+
+# save_section FILE SECTION ARRAY_NAME LIMIT(=0; no limit)
+#
+# Replaces SECTION with the contents of the named Bash array.
+# If SECTION does not exist, it is appended.
+#
+function save_section()
+{
+local file=$1
+local section=$2
+local array_name=$3
+local new_file current_section in_section line found limit n
+
+[[ $# -eq 3 ]] || return 2
+
+local -n new_lines="$array_name"
+
+new_file="${file}.new"
+
+found=0
+in_section=0
+current_section=""
+limit="${4:-0}"
+
+if [[ -f "$file" ]]; then
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		# Section header
+		if [[ $line =~ ^\[([^\]]+)\]$ ]]; then
+			current_section=${BASH_REMATCH[1]}
+
+			if [[ "$current_section" == "$section" ]]; then
+				found=1
+				in_section=1
+
+				# Write replacement section.
+				printf '[%s]\n' "$section" >> "$new_file"
+				for line in "${new_lines[@]}"; do
+					printf '%s\n' "${line}" >> "$new_file"
+					((n++))
+					[[ $limit -ne 0 && $n -ge $limit ]] && break
+				done
+				printf '\n' >> "$new_file"
+
+				continue
+			fi
+
+			# Leaving the section being replaced.
+			if (( in_section )); then
+				in_section=0
+			fi
+
+			printf '%s\n' "$line" >> "$new_file"
+			continue
+		fi
+
+		# Empty line terminates the section.
+		if [[ -z "$line" ]]; then
+			if (( in_section )); then
+				in_section=0
+				continue
+			fi
+
+			printf '\n' >> "$new_file"
+			continue
+		fi
+
+		# Skip old contents of the section being replaced.
+		if (( in_section )); then
+			continue
+		fi
+
+		printf '%s\n' "$line" >> "$new_file"
+	done < "$file"
+fi
+
+# Section didn't exist: append it.
+if (( ! found )); then
+	# Make sure the new section is separated from existing content.
+	if [[ -s "$new_file" ]]; then
+		printf '\n' >> "$new_file"
+	fi
+
+	printf '[%s]\n' "$section" >> "$new_file"
+	printf '%s\n' "${new_lines[@]}" >> "$new_file"
+	printf '\n' >> "$new_file"
+fi
+
+# Atomically replace the original.
+if ! mv -f -- "$new_file" "$file"; then
+	rm -f -- "$new_file"
+	return 1
+fi
+}
+
+#***************************************************************************************************
+
+function load_settings()
+{
+load_section "${configfile}" 'settings' 'settings'
+}
+
+#***************************************************************************************************
+# 1 - name of variable
+
+function get_setting()
+{
+local line needle
+
+needle="$1"
+
+for line in "${settings[@]}"; do
+	if [[ "${line}" == "${needle}="* ]]; then
+		echo "${line##*=}"
+		return 0
+	fi
+done
+
+return 1
+}
+
+#***************************************************************************************************
+
+function load_firmware_list()
+{
+load_section "${configfile}" "${serial}" 'firmwares'
+load_section "${configfile}" 'all' 'firmwares' '1'
+}
+
+#***************************************************************************************************
+#***************************************************************************************************
+
+# Udev callback function
+if [[ "$1" == "udev" ]]; then
+	shift
+	action="$1"
+	shift
+
+	if [[ -e "${socketfile}" ]]; then
+		# Fix ownership, so that udev may be able to write to the fifo
+		if [[ "$(stat -c '%U:%G' "$socketfile")" != "root:plugdev" ]]; then
+			chown root:plugdev "$socketfile"
+		fi
+
+		devpath="$1"
+		serial="$(udevadm info --query=property --path="${devpath}" 2>/dev/null | grep 'ID_SERIAL=' | cut -d'=' -f2)"
+
+		if [[ "${serial}" != "" ]]; then
+			# shellcheck disable=SC2016
+			timeout 2s bash -c 'printf "%s\n" "$1" > "$2"' _ "${action} ${serial}" "${socketfile}" || :
+		fi
+	fi
+
+	exit
+fi
+
+####################################################################################################
+
+# Child/GUI program for userspace
+if [[ "$1" == "child" ]]; then
+	shift
+	action="$1"
+	fullserial="$2"
+
+	yad_pid=""
+
+	serial="${fullserial##*_}"
+
+	trap child_cleanup EXIT INT TERM
+
+	settings=()
+	load_settings
+
+	firmwares=()
+	load_firmware_list "${serial_num}"
+
+	dcho "spawning menu"
+	firmware_select_menu
+	dcho "ret: $ret"
+
+
+	exit
+fi
+
+####################################################################################################
+
+# Event listener controls
+if [[ "$1" == "terminate" ]]; then
+	if [[ -e "${socketfile}" ]]; then
+		echo "terminate" > "${socketfile}"
+	fi
+
+	exit
+fi
+
+# Event listener main loop
+if [[ "$1" == "listen" ]]; then
+	declare -A children
+
+	if ! command -v yad >/dev/null 2>&1; then
+		echo "This script requires 'yad' to be installed!" >&2
+		exit 1
+	fi
+
+	if ! command -v timeout >/dev/null 2>&1; then
+		echo "This script requires 'timeout' to be installed!" >&2
+		exit 1
+	fi
+
+	if ! command -v picotool >/dev/null 2>&1; then
+		echo "This script requires 'picotool' to be installed!" >&2
+		exit 1
+	fi
+
+	cleanup
+
+	if [[ ! -e "${socketfile}" ]]; then
+		if ! mkfifo "${socketfile}"; then
+			echo "Failed to create fifo file ${socketfile}!"
+			exit 2
+		fi
+
+	chmod 0660 "${socketfile}"
+	fi
+
+	exec 3<>"$socketfile"
+
+	trap cleanup EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+
+	echo "enter loop"
+	while read -rs -u 3 action serial; do
+		echo "$action   $serial"
+		if [[ "${action}" == "add" ]]; then
+			"$0" child "${action}" "${serial}" &
+			children["${serial}"]="$!"
+			dcho "Spawning child for ${action} ${children[$serial]}..."
+			echo "Spawning child for ${action} ${children[$serial]}..."
+		fi
+
+		if [[ "${action}" == "remove" ]]; then
+			dcho "Killing child ${children[$serial]}..."
+		fi
+
+		if [[ "${action}" == "done" ]]; then
+			dcho "Child ${children[$serial]} finished."
+		fi
+
+		if [[ "${action}" == "remove" || "${action}" == "done" ]]; then
+			if [[ -n ${children["$serial"]:-} ]]; then
+				kill "${children["$serial"]}" 2>/dev/null
+				unset 'children[$serial]'
+			fi
+		fi
+
+		if [[ "${action}" == "terminate" ]]; then
+			dcho "Terminate called..."
+			break
+		fi
+	done
+
+	exit
+fi
+
+# Usage
+echo "Usage: $0 listen"
+echo ""
+echo "listen:            Start event listening loop to process udev callback on device insertiong and removal; a flash dialog will be opened for every inserted Raspberry PI Pico (only in BOOTSEL mode)."
+echo "terminate:         Gracefully terminate the listening loop and all open flash dialogs."
+exit 1

@@ -1,0 +1,5 @@
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", ACTION=="add", RUN+="/usr/local/bin/picopy udev add %p"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000f", ACTION=="add", RUN+="/usr/local/bin/picopy udev add %p"
+
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", ACTION=="remove", RUN+="/usr/local/bin/picopy udev remove %p"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000f", ACTION=="remove", RUN+="/usr/local/bin/picopy udev remove %p"
