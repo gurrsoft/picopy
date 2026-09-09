@@ -456,10 +456,12 @@ if [[ "$1" == "listen" ]]; then
 		values=("${values[@]:2}")
 
 		if [[ "${action}" == "add" ]]; then
-			"$0" child "${action}" "${serial}" &
-			children["${serial}"]="$!"
-			dcho "Spawning child for ${action} ${children[$serial]}..."
-			echo "Spawning child for ${action} ${children[$serial]}..."
+			if [[ -z ${children["$serial"]:-} ]]; then
+				"$0" child "${action}" "${serial}" &
+				children["${serial}"]="$!"
+				dcho "Spawning child for ${action} ${serial}: ${children[$serial]}..."
+				echo "Spawning child for ${action} ${serial}: ${children[$serial]}..."
+			fi
 		fi
 
 		if [[ "${action}" == "remove" ]]; then
@@ -467,7 +469,7 @@ if [[ "$1" == "listen" ]]; then
 		fi
 
 		if [[ "${action}" == "done" ]]; then
-			dcho "Child ${children[$serial]} finished."
+			dcho "Child ${serial} finished."
 		fi
 
 		if [[ "${action}" == "remove" || "${action}" == "done" ]]; then
