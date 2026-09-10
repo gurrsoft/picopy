@@ -302,46 +302,31 @@ load_section "${configfile}" 'all' 'firmwares' '1'
 }
 
 #***************************************************************************************************
-# in_array needle (haystack)
+# in_array needle(string) haystack(variable's name)
 # retcode: 1=not found; 0 found
 
 function in_array()
 {
-local needle haystack i
-
-needle="$1"
-shift
-haystack=( "$@" )
-
-for i in "${!haystack[@]}"; do
-	if [[ "${needle}" == "${haystack[i]}" ]]; then
-		return 0
-	fi
-done
-
-return 1
+array_pos "$1" "$2" >/dev/null
+return $?
 }
 
 #***************************************************************************************************
-# array_pos needle (haystack)
+# array_pos needle(string) haystack(variable's name)
 # out: empty string=not found; index otherwise
 # retcode: 1=not found; 0 found
 
 function array_pos()
 {
-local needle haystack i
+local needle="$1"
+local -n haystack="$2"
+local key
 
-needle="$1"
-shift
-haystack=( "$@" )
-
-for i in "${!haystack[@]}"; do
-	if [[ "${needle}" == "${haystack[i]}" ]]; then
-		printf '%s\n' "$i"
+for key in "${!haystack[@]}"; do
+	if [[ "${needle}" == "${haystack[$key]}" ]]; then
+		printf '%s\n' "$key"
 		return 0
 	fi
-
-	((i++))
 done
 
 return 1
