@@ -387,7 +387,6 @@ if [[ "$1" == "child" ]]; then
 	firmware_select_menu
 	dcho "ret: $ret"
 
-
 	exit
 fi
 
@@ -470,7 +469,7 @@ if [[ "$1" == "listen" ]]; then
 		fi
 
 		if [[ "${action}" == "terminate" ]]; then
-			dcho "Terminate called..."
+			dcho "Terminating event listener loop..."
 			break
 		fi
 	done
