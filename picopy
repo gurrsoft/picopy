@@ -161,7 +161,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 	# Collect lines belonging to the requested section.
 	if [[ $found -eq 1 ]]; then
 		addresult=1
-		[[ "${4:-0}" == "1" && in_array "${line}" "${result[@]}" ]] && addresult=0 # don't add existing elements more than once in append mode
+		[[ "${4:-0}" == "1" ]] && in_array "${line}" "${result[@]}" && addresult=0 # don't add existing elements more than once in append mode
 
 		if [[ $addresult -eq 1 ]]; then
 			result+=("$line")
