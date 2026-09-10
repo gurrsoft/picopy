@@ -357,11 +357,10 @@ fi
 # Child/GUI program for userspace
 if [[ "$1" == "child" ]]; then
 	action="$2"
-	fullserial="$3"
+	serial="$3"
+	fullserial="$4"
 
 	yad_pid=""
-
-	serial="${fullserial##*_}"
 
 	trap child_cleanup EXIT INT TERM
 
@@ -465,7 +464,10 @@ if [[ "$1" == "listen" ]]; then
 			if [[ -z ${children["$serial"]:-} ]]; then
 				"$0" child "${action}" "${serial}" &
 				children["${serial}"]="$!"
-				dcho "Spawning child for ${action} ${serial}: ${children[$serial]}..."
+				children_device["${serial}"]="${devpath}"
+				dcho "Spawning child for ${fullserial}; pid: ${children[$serial]}..."
+			else
+				dcho "Child already exists for ${fullserial}, not creating a new one (pid: ${children[$serial]})!"
 			fi
 		fi
 
