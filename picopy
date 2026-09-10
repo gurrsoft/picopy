@@ -346,19 +346,7 @@ if [[ "$1" == "udev" ]]; then
 			chown root:plugdev "$socketfile"
 		fi
 
-		timeout 2s bash -c 'printf "%s\n" "$1" > "$2"' _ "debug ${action} ${devpath}" "${socketfile}" || :
-
-# Removal detection does not work even with the below workaround
-#		if [[ "${devpath}" == "/devices/"* && "${devpath##*/}" == *":"* ]]; then
-#			devpath="${devpath%/*}"
-#		fi
-
-		serial="$(udevadm info --query=property --path="${devpath}" 2>/dev/null | grep 'ID_SERIAL=' | cut -d'=' -f2)"
-
-		if [[ "${serial}" != "" ]]; then
-			# shellcheck disable=SC2016
-			timeout 2s bash -c 'printf "%s\n" "$1" > "$2"' _ "${action} ${serial}" "${socketfile}" || :
-		fi
+		timeout 2s bash -c 'printf "%s\n" "$1" > "$2"' _ "udev ${action} ${devpath}" "${socketfile}" || :
 	fi
 
 	exit
@@ -404,6 +392,7 @@ fi
 # Event listener main loop
 if [[ "$1" == "listen" ]]; then
 	declare -A children
+	declare -A children_device
 
 	if ! command -v yad >/dev/null 2>&1; then
 		echo "This script requires 'yad' to be installed!" >&2
@@ -441,9 +430,36 @@ if [[ "$1" == "listen" ]]; then
 	while read -rs -u 3 -a values; do
 		dcho "${values[@]}"
 
-		action="${values[0]}"
-		serial="${values[1]}"
-		values=("${values[@]:2}")
+		if [[ "${values[0]}" == "udev" ]]; then
+			action="${values[1]}"
+			devpath="${values[2]}"
+			values=("${values[@]:3}")
+
+			fullserial="$(udevadm info --query=property --path="${devpath}" 2>/dev/null | grep 'ID_SERIAL=' | cut -d'=' -f2)"
+
+			if [[ "${fullserial}" == "" ]]; then
+# Removal detection does not work even with the below workaround
+				if [[ "${devpath}" == "/devices/"* && "${devpath##*/}" == *":"* ]]; then
+					devpath="${devpath%/*}"
+				fi
+
+				fullserial="$(array_pos "${devpath}" "children_device")"
+
+				if [[ "${fullserial}" == "" ]]; then
+					dcho "Couldn't identify ${devpath}, skipping event..."
+					continue
+				else
+					dcho "Identied ${devpath} as ${fullserial}"
+				fi
+			fi
+		else
+			action="${values[0]}"
+			fullserial="${values[1]}"
+			devpath=""
+			values=("${values[@]:2}")
+		fi
+
+		serial="${fullserial##*_}"
 
 		if [[ "${action}" == "add" ]]; then
 			if [[ -z ${children["$serial"]:-} ]]; then
@@ -453,18 +469,17 @@ if [[ "$1" == "listen" ]]; then
 			fi
 		fi
 
-		if [[ "${action}" == "remove" ]]; then
-			dcho "Killing child ${children[$serial]}..."
-		fi
-
-		if [[ "${action}" == "done" ]]; then
-			dcho "Child ${serial} finished."
-		fi
-
 		if [[ "${action}" == "remove" || "${action}" == "done" ]]; then
 			if [[ -n ${children["$serial"]:-} ]]; then
-				kill "${children["$serial"]}" 2>/dev/null
+				[[ "${action}" == "remove" ]] && dcho "Killing child for ${serial}, pid: ${children[$serial]}..."
+				[[ "${action}" == "done" ]] && dcho "Child ${serial}, pid: ${children[$serial]} finished."
+
+				[[ "${action}" == "remove" ]] && kill "${children["$serial"]}" 2>/dev/null
+
 				unset 'children[$serial]'
+				unset 'children_device[$serial]'
+			else
+				dcho "No child found for ${serial}, can't handle event ${action}!"
 			fi
 		fi
 
